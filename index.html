@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mi Día</title>
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#050505">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mi Día">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:linear-gradient(160deg,#232323,#050505);color:#f3f3f3;font:16px/1.45 -apple-system,system-ui,"Segoe UI",sans-serif;display:grid;place-items:center;padding:max(24px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+.box{width:100%;max-width:360px;display:grid;gap:14px;justify-items:center;text-align:center}
+img{width:76px;height:76px;border-radius:18px}
+h1{font-size:1.45rem;margin:4px 0 0}
+p{margin:0;color:#b5b5b5;font-size:.95rem}
+form{display:grid;gap:10px;width:100%}
+input{width:100%;font:600 1.05rem ui-monospace,Menlo,monospace;letter-spacing:.06em;text-align:center;padding:13px 12px;border-radius:12px;border:1px solid #3a3a3a;background:#111;color:#fff}
+input:focus{outline:2px solid #e8b04a;outline-offset:1px}
+button{font:700 1rem system-ui;border:0;border-radius:12px;padding:13px;background:#f3f3f3;color:#0a0a0a;cursor:pointer}
+button:disabled{opacity:.5}
+.link{background:none;color:#b5b5b5;font-weight:600;padding:6px}
+.err{color:#ff8a80;min-height:1.3em}
+.bar{width:100%;height:6px;border-radius:6px;background:#2a2a2a;overflow:hidden}.bar i{display:block;height:100%;width:0;background:#e8b04a;transition:width .2s}
+[hidden]{display:none!important}
+</style></head><body>
+<div class="box">
+  <img src="apple-touch-icon.png" alt="">
+  <h1>Mi Día</h1>
+  <p id="msg">Cargando…</p>
+  <form id="f" hidden autocomplete="off">
+    <input id="pw" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Código de verificación" aria-label="Código de verificación">
+    <button id="go">Entrar</button>
+    <div class="err" id="err" role="alert"></div>
+  </form>
+  <div id="dl" hidden style="width:100%;display:grid;gap:8px">
+    <div class="bar"><i id="bi"></i></div>
+    <p id="dlt">Guardando la app para usarla sin internet…</p>
+    <button class="link" id="skip" hidden>Entrar sin esperar</button>
+  </div>
+</div>
+<script src="sync.js"></script>
+<script>
+(async function(){
+const $=id=>document.getElementById(id);
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+function db(){return new Promise((ok,no)=>{const r=indexedDB.open('midia-vault',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
+async function kv(op,k,v){const d=await db();return new Promise((ok,no)=>{const t=d.transaction('kv',op==='get'?'readonly':'readwrite'),s=t.objectStore('kv');const r=op==='get'?s.get(k):op==='del'?s.delete(k):s.put(v,k);r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
+const APP='app/';
+async function enter(){if(window.MDSYNC){$('msg').textContent='Sincronizando con tu otro dispositivo…';await Promise.race([MDSYNC.sync('full'),new Promise(z=>setTimeout(z,8000))])}location.replace(APP)}
+if(!('serviceWorker' in navigator)||!window.crypto||!crypto.subtle){$('msg').textContent='Este navegador no puede abrir la app. Usa Safari en el iPhone o Chrome en la laptop.';return}
+let reg;try{reg=await navigator.serviceWorker.register('sw.js');await navigator.serviceWorker.ready}catch(e){$('msg').textContent='No se pudo preparar la app sin internet. Recarga la página.';return}
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+const sw=()=>(navigator.serviceWorker.controller||reg.active);
+if(location.search.includes('olvidar')){await kv('del','k');try{for(const k of await caches.keys())await caches.delete(k)}catch(e){}history.replaceState(null,'',location.pathname);$('msg').textContent='Listo. Este dispositivo ya no tiene la llave.'}
+const have=await kv('get','k');
+if(have){$('msg').textContent='Abriendo…';sw().postMessage({t:'sync'});await enter();return}
+$('msg').textContent='Escribe tu código de verificación. Solo lo pide la primera vez en cada dispositivo; después entras con tu PIN.';
+$('f').hidden=false;$('pw').focus();
+let fails=0;
+$('f').onsubmit=async e=>{e.preventDefault();const pass=$('pw').value.toLowerCase().replace(/[\s-]+/g,'');if(!pass)return;
+  $('go').disabled=true;$('err').textContent='Comprobando…';
+  try{
+    let r;try{r=await fetch('v/key.json',{cache:'no-cache'})}catch(x){r=await caches.match('v/key.json')}
+    const K=await r.json();
+    const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(pass),'PBKDF2',false,['deriveKey']);
+    const kek=await crypto.subtle.deriveKey({name:'PBKDF2',salt:b64(K.salt),iterations:K.iter,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['decrypt']);
+    let raw;try{raw=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(K.iv)},kek,b64(K.w))}catch(x){fails++;await new Promise(z=>setTimeout(z,600*fails));$('err').textContent='Código incorrecto.';$('go').disabled=false;$('pw').select();return}
+    const key=await crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['encrypt','decrypt']);
+    await kv('put','k',key);
+    $('f').hidden=true;$('err').textContent='';$('dl').hidden=false;$('msg').textContent='Código correcto.';
+    setTimeout(()=>$('skip').hidden=false,4000);
+    navigator.serviceWorker.addEventListener('message',ev=>{const d=ev.data||{};
+      if(d.t==='progress'){$('bi').style.width=Math.round(100*d.done/Math.max(1,d.total))+'%';$('dlt').textContent=`Guardando la app para usarla sin internet… ${d.done} de ${d.total}`}
+      if(d.t==='synced')enter();
+      if(d.t==='sync-error'){$('dlt').textContent='No terminó de descargarse. Puedes entrar igual; se completará cuando tengas internet.';$('skip').hidden=false}});
+    sw().postMessage({t:'sync'});
+  }catch(x){$('err').textContent='No pude comprobar el código. Revisa tu conexión e inténtalo otra vez.';$('go').disabled=false}
+};
+$('skip').onclick=()=>enter();
+})();
+</script>
+</body></html>
